@@ -55,12 +55,6 @@ def main():
     else:
         start_process(conf)
 
-    if not os.path.exists(conf):
-        print("Config file doesn't exist, you have to initialize the config using \"init\".")
-        sys.exit(1)
-
-    start_process(conf)
-
 
 def init_(conf: str,
           output: str,
@@ -371,6 +365,13 @@ def compare_versions(current: str,
 def compare_version_numbers(current_version: list,
                             latest_version: list,
                             number: int) -> bool:
+    """
+    Should return True if "latest_version" is higher than "current_version".
+    :param current_version: supposed old version
+    :param latest_version: supposed new version
+    :param number: amount of items in the list that will be iterated
+    :return: Whether the "latest_version" is higher than the "current_version"
+    """
     for i in range(number):
         current_ver = current_version[i]
         latest_ver = latest_version[i]
@@ -381,9 +382,9 @@ def compare_version_numbers(current_version: list,
         latest_ver = end_fill(latest_ver, pad)
 
         if int(current_ver) > int(latest_ver):
-            return True
-        elif int(current_ver) < int(latest_ver):
             return False
+        elif int(current_ver) < int(latest_ver):
+            return True
         else:
             continue
 
