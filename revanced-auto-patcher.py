@@ -52,8 +52,8 @@ def main():
 
     if init:
         init_(conf, output, store_path)
-    else:
-        start_process(conf)
+
+    start_process(conf)
 
 
 def init_(conf: str,
