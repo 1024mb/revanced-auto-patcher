@@ -222,7 +222,7 @@ def get_latest_version_name_and_url(url: str,
     resp = sess.get(url, allow_redirects=True)
 
     if not 199 < resp.status_code < 300:
-        print(f"There was an error fetching the latest version: {resp.status_code}")
+        print(f"There was an error fetching the latest version for \"{tool_name}\": {resp.status_code}")
         sys.exit(1)
 
     json_data = json.loads(resp.content)
@@ -252,14 +252,14 @@ def get_download_url(data: dict,
     item_number = len(data["assets"])
 
     if item_number == 0:
-        print(f"No assets found for {tool_name}")
+        print(f"No assets found for \"{tool_name}\"")
         return None, None
 
     for i in range(0, item_number):
         if data["assets"][i]["name"].lower().endswith(extension):
             return data["assets"][i]["browser_download_url"], data["assets"][i]["name"]
 
-    print(f"No matching assets found for {tool_name} [expected extension: {extension}]")
+    print(f"No matching assets found for \"{tool_name}\" [expected extension: {extension}]")
 
     return None, None
 
@@ -340,6 +340,7 @@ def get_latest_supported_yt_version(conf: str) -> str:
         for version_to_check in latest_versions:
             if compare_versions(version_to_check, newest_found):
                 newest_found = version_to_check
+        return newest_found
 
 
 def compare_versions(current: str,
