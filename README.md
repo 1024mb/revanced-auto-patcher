@@ -1,3 +1,8 @@
+## Dependencies:
+
+- requests
+- playwright
+
 If first use you have to run this with `--init` for the configuration file to be created. Afterwards it will
 download the latest tools (ReVanced CLI, Patches, Integrations), then the YouTube APK file and finally it will start
 patching the APK.
