@@ -488,7 +488,7 @@ async def download_latest_yt_apk(conf: str,
                 sys.exit(1)
 
             async with page.expect_download() as downloader:
-                await page.click("a.download-start-btn", button="left")
+                await page.click("a.download-start-btn", button="left", timeout=360000)
             download = await downloader.value
             await download.save_as(os.path.join(config["Store_Path"], f"com.google.android.youtube.{version}.apk"))
         except playwright.async_api.TimeoutError as e:
