@@ -50,6 +50,12 @@ def main():
                              f"\"--init\".",
                         default=[os.path.join(os.getcwd(), "tmp")],
                         nargs=1)
+    parser.add_argument("--include-beta",
+                        help="Include beta (preview) versions when searching for updates.",
+                        action="store_true")
+    parser.add_argument("--force-patch",
+                        help="Force patch YouTube apk file even if no new supported YT version is found.",
+                        action="store_true")
     parser.add_argument("--log-level",
                         help="How much stuff is logged. One of 'debug', 'info', 'warning', 'error'.",
                         default="warning",
@@ -59,9 +65,11 @@ def main():
     args = parser.parse_args()
 
     init: bool = args.init
-    conf: str = args.conf[0]
+    config_path: str = args.conf[0]
     output: str = args.output[0]
     store_path: str = args.store_path[0]
+    include_beta: bool = args.include_beta
+    force_patch: bool = args.force_patch
 
     log_level: str = logging.getLevelName(args.log_level.upper())
     logging.basicConfig(level=log_level, format="%(asctime)s %(levelname)s: %(message)s")
@@ -69,9 +77,11 @@ def main():
 
     if init:
         logging.info("Initializing configuration...")
-        init_(conf, output, store_path)
+        init_(config_path, output, store_path)
 
-    start_process(conf)
+    start_process(config_path=config_path,
+                  include_beta=include_beta,
+                  force_patch=force_patch)
 
 
 def init_(conf: str,
@@ -83,16 +93,12 @@ def init_(conf: str,
         "Versions": {
             "CLI": "",
             "Patches": "",
-            "Patches_JSON": "",
             "Original_APK": "",
-            "Integrations": ""
         },
         "Names": {
             "CLI": "",
             "Patches": "",
-            "Patches_JSON": "",
             "Original_APK": "",
-            "Integrations": ""
         }
     }
 
@@ -100,22 +106,22 @@ def init_(conf: str,
         json.dump(config, stream, indent=4)
 
 
-def start_process(conf: str) -> None:
-    if not os.path.exists(conf):
+def start_process(config_path: str,
+                  include_beta: bool,
+                  force_patch : bool) -> None:
+    if not os.path.exists(config_path):
         logging.critical("Config file doesn't exist, you have to initialize.")
         sys.exit(1)
-    elif not os.path.isfile(conf):
+    elif not os.path.isfile(config_path):
         logging.critical("Supplied config file path is not a file.")
         sys.exit(1)
 
-    config: Dict[str, str | Dict[str, str]] = get_config(conf)
-    latest_versions: Dict[str, Dict[str, Optional[str]]] = get_latest_versions()
+    config_data: Dict[str, str | Dict[str, str | Dict[str, str | bool]]] = get_config(config_path=config_path)
+    latest_versions: Dict[str, Dict[str, Optional[str]]] = get_latest_versions(include_beta=include_beta)
 
     current_versions: Dict[str, str] = {
-        "CLI": config["Versions"]["CLI"],
-        "Patches": config["Versions"]["Patches"],
-        "Patches_JSON": config["Versions"]["Patches_JSON"],
-        "Integrations": config["Versions"]["Integrations"]
+        "CLI": config_data["Versions"]["CLI"],
+        "Patches": config_data["Versions"]["Patches"],
     }
 
     new_ver_available: bool = False
@@ -125,72 +131,80 @@ def start_process(conf: str) -> None:
             continue
         if latest_versions[tool]["Version"] != current_versions[tool]:
             logging.log(MESSAGE, f"New version found for {tool}: {latest_versions[tool]['Version']}.")
-            old_version_path = os.path.join(config["Store_Path"], config["Names"][tool])
+            old_version_path = os.path.join(config_data["Store_Path"], config_data["Names"][tool])
             new_ver_available = True
             download_latest_version(url=latest_versions[tool]["URL"],
                                     name=latest_versions[tool]["Name"],
-                                    download_path=config["Store_Path"])
-            if tool != "Patches_JSON" and config["Names"][tool] != "":
+                                    download_path=config_data["Store_Path"])
+            if config_data["Names"][tool] != "":
                 try:
                     logging.info(f"Removing old version of {tool}...")
                     os.remove(old_version_path)
                 except FileNotFoundError:
                     pass
+                except PermissionError:
+                    logging.warning(f"There was an error removing the file: {old_version_path}")
         else:
             logging.log(MESSAGE, f"{tool} is already updated to the latest version.")
 
     if new_ver_available:
-        write_new_versions_and_names(latest_versions, conf, config)
+        write_new_versions_and_names(latest_versions=latest_versions,
+                                     config_path=config_path,
+                                     config_data=config_data)
 
-    current_yt_version: str = config["Versions"]["Original_APK"]
-    latest_yt_version: str = get_latest_supported_yt_version(conf)
+    current_yt_version: str = config_data["Versions"]["Original_APK"]
+    latest_yt_version: str = get_latest_supported_yt_version(config_path)
 
-    if compare_versions(current_yt_version, latest_yt_version):
+    if compare_versions(version_to_check=latest_yt_version, latest_version_found=current_yt_version):
         logging.log(MESSAGE, "New YT version supported...")
-        asyncio.run(download_latest_yt_apk(conf, latest_yt_version))
-    else:
+        asyncio.run(download_latest_yt_apk(config_path, latest_yt_version))
+
+        yt_version: Dict[str, Dict[str, str]] = {
+            "Original_APK": {
+                "Name": f"com.google.android.youtube.{latest_yt_version}.apk",
+                "Version": latest_yt_version
+            }
+        }
+
+        write_new_versions_and_names(latest_versions=yt_version,
+                                     config_path=config_path,
+                                     config_data=get_config(config_path=config_path))
+    elif not force_patch:
         logging.log(MESSAGE, "No new YT version is supported, latest version has been already patched.")
         sys.exit(0)
+    else:
+        logging.log(MESSAGE, "No new YT version is supported but --force-patch was used.")
 
-    yt_version: Dict[str, Dict[str, str]] = {
-        "Original_APK": {
-            "Name": f"com.google.android.youtube.{latest_yt_version}.apk",
-            "Version": latest_yt_version
-        }
-    }
-
-    write_new_versions_and_names(yt_version, conf, get_config(conf))
-    patch_latest_yt_apk(conf)
+    patch_latest_yt_apk(config_path=config_path)
 
     logging.log(MESSAGE, "All done.")
 
 
-def get_config(conf: str) -> Dict[str, str | Dict[str, str]]:
-    with open(conf, "r", encoding="utf-8", errors="backslashreplace") as stream:
+def get_config(config_path: str) -> Dict[str, str | Dict[str, str]]:
+    with open(config_path, "r", encoding="utf-8", errors="backslashreplace") as stream:
         return copy.deepcopy(json.loads(stream.read()))
 
 
-def get_latest_versions() -> Dict[str, Dict[str, Optional[str]]]:
-    latest_cli: Dict[str, Optional[str]] = get_latest_cli()
-    latest_patch_bundle: Dict[str, Optional[str]] = get_latest_patch_bundle()
-    latest_patch_json: Dict[str, Optional[str]] = get_latest_patch_json()
-    latest_integrations: Dict[str, Optional[str]] = get_latest_integrations_apk()
+def get_latest_versions(include_beta: bool) -> Dict[str, Dict[str, Optional[str]]]:
+    latest_cli: Dict[str, Optional[str]] = get_latest_cli(include_beta=include_beta)
+    latest_patch_bundle: Dict[str, Optional[str]] = get_latest_patch_bundle(include_beta=include_beta)
 
     return {
         "CLI": latest_cli,
         "Patches": latest_patch_bundle,
-        "Patches_JSON": latest_patch_json,
-        "Integrations": latest_integrations
     }
 
 
-def get_latest_cli() -> Dict[str, Optional[str]]:
+def get_latest_cli(include_beta: bool) -> Dict[str, Optional[str]]:
     url: str = "https://api.github.com/repos/revanced/revanced-cli/releases"
 
     newest_version: str
     newest_version_url: Optional[str]
     newest_version_name: Optional[str]
-    newest_version, newest_version_url, newest_version_name = get_latest_version_name_and_url(url, "jar", "cli")
+    newest_version, newest_version_url, newest_version_name = get_latest_version_name_and_url(url=url,
+                                                                                              ext="jar",
+                                                                                              tool_name="cli",
+                                                                                              include_beta=include_beta)
 
     return {
         "Name": newest_version_name,
@@ -199,47 +213,16 @@ def get_latest_cli() -> Dict[str, Optional[str]]:
     }
 
 
-def get_latest_patch_bundle() -> Dict[str, Optional[str]]:
+def get_latest_patch_bundle(include_beta: bool) -> Dict[str, Optional[str]]:
     url: str = "https://api.github.com/repos/revanced/revanced-patches/releases"
 
     newest_version: str
     newest_version_url: Optional[str]
     newest_version_name: Optional[str]
-    newest_version, newest_version_url, newest_version_name = get_latest_version_name_and_url(url,
-                                                                                              "jar",
-                                                                                              "patch bundle")
-
-    return {
-        "Name": newest_version_name,
-        "Version": newest_version,
-        "URL": newest_version_url
-    }
-
-
-def get_latest_patch_json() -> Dict[str, Optional[str]]:
-    url: str = "https://api.github.com/repos/revanced/revanced-patches/releases"
-
-    newest_version: str
-    newest_version_url: Optional[str]
-    newest_version_name: Optional[str]
-    newest_version, newest_version_url, newest_version_name = get_latest_version_name_and_url(url, "json", "patch json")
-
-    return {
-        "Name": newest_version_name,
-        "Version": newest_version,
-        "URL": newest_version_url
-    }
-
-
-def get_latest_integrations_apk() -> Dict[str, Optional[str]]:
-    url: str = "https://api.github.com/repos/revanced/revanced-integrations/releases"
-
-    newest_version: str
-    newest_version_url: Optional[str]
-    newest_version_name: Optional[str]
-    newest_version, newest_version_url, newest_version_name = get_latest_version_name_and_url(url,
-                                                                                              "apk",
-                                                                                              "integration apk")
+    newest_version, newest_version_url, newest_version_name = get_latest_version_name_and_url(url=url,
+                                                                                              ext="rvp",
+                                                                                              tool_name="patch bundle",
+                                                                                              include_beta=include_beta)
 
     return {
         "Name": newest_version_name,
@@ -250,7 +233,8 @@ def get_latest_integrations_apk() -> Dict[str, Optional[str]]:
 
 def get_latest_version_name_and_url(url: str,
                                     ext: str,
-                                    tool_name: str) -> tuple[str, Optional[str], Optional[str]]:
+                                    tool_name: str,
+                                    include_beta: bool) -> tuple[str, Optional[str], Optional[str]]:
 
     sess: Session = requests.session()
     sess.headers.update({
@@ -265,21 +249,25 @@ def get_latest_version_name_and_url(url: str,
 
     json_data: dict = json.loads(resp.content)
 
-    found_stable: bool = False
-    i: int = 0
-    i_max: int = len(json_data) - 1
-
-    while not found_stable and i <= i_max:
-        found_stable = not json_data[i]["prerelease"]
-        i += 1
-
-    if not found_stable:
-        # No stable version found, using latest pre-release version
+    if include_beta:
         newest_version = json_data[0]["tag_name"]
         newest_version_url, newest_version_name = get_download_url(json_data[0], ext, tool_name)
     else:
-        newest_version = json_data[i - 1]["tag_name"]
-        newest_version_url, newest_version_name = get_download_url(json_data[i - 1], ext, tool_name)
+        found_stable: bool = False
+        i: int = 0
+        i_max: int = len(json_data) - 1
+
+        while not found_stable and i <= i_max:
+            found_stable = not json_data[i]["prerelease"]
+            i += 1
+
+        if not found_stable:
+            # No stable version found, using latest pre-release version
+            newest_version = json_data[0]["tag_name"]
+            newest_version_url, newest_version_name = get_download_url(json_data[0], ext, tool_name)
+        else:
+            newest_version = json_data[i - 1]["tag_name"]
+            newest_version_url, newest_version_name = get_download_url(json_data[i - 1], ext, tool_name)
 
     return re.sub(VERSION_REGEX, "", newest_version), newest_version_url, newest_version_name,
 
@@ -359,87 +347,89 @@ def sanitize_name(name: str) -> str:
     return name
 
 
-def get_latest_supported_yt_version(conf: str) -> str:
-    config: Dict[str, str | Dict[str, str]] = get_config(conf)
+def get_latest_supported_yt_version(config_path: str) -> str:
+    config_data: Dict[str, str | Dict[str, str]] = get_config(config_path=config_path)
 
-    json_path: str = os.path.join(config["Store_Path"], config["Names"]["Patches_JSON"])
-    patches_json: List[dict] = json.load(open(json_path, "r", encoding="utf-8", errors="backslashreplace"))
+    get_supported_versions_cmd = [
+        "java",
+        "-jar",
+        os.path.join(config_data["Store_Path"], config_data["Names"]["CLI"]),
+        "list-versions",
+        os.path.join(config_data["Store_Path"], config_data["Names"]["Patches"]),
+        "-f",
+        "com.google.android.youtube"
+    ]
 
-    latest_versions: List[str] = []
+    try:
+        list_versions_output = subprocess.check_output(get_supported_versions_cmd, encoding="utf-8")
+    except subprocess.CalledProcessError as e:
+        logging.critical(f"Couldn't get latest versions, error: {e}", exc_info=True)
+        exit(1)
 
-    patch: dict
-    for patch in patches_json:
-        if patch.get("compatiblePackages") is not None:
-            for package in patch["compatiblePackages"]:
-                if package.get("name", "") == "com.google.android.youtube":
-                    try:
-                        last_index = len(package.get("versions", "")) - 1
-                    except TypeError:
-                        continue
-                    version = package["versions"][last_index]
-                    if version not in latest_versions:
-                        latest_versions.append(version)
-                    break
+    supported_versions = extract_versions(output=list_versions_output)
 
-    if len(latest_versions) == 0:
+    if len(supported_versions) == 0:
         logging.critical("No supported version found for Youtube. "
                          "Unless something has changed since this program has been written, this shouldn't happen.")
         sys.exit(2)
 
-    if len(latest_versions) == 1:
-        return latest_versions[0]
+    if len(supported_versions) == 1:
+        return supported_versions[0]
     else:
         newest_found: str = ""
-        for version_to_check in latest_versions:
-            if compare_versions(version_to_check, newest_found):
+        for version_to_check in supported_versions:
+            if compare_versions(version_to_check=version_to_check,
+                                latest_version_found=newest_found):
                 newest_found = version_to_check
 
         return newest_found
 
+def extract_versions(output: str) -> List[str]:
+    return re.findall(r"(?:\s|^|\t)+([0-9]+\.[0-9.]+)", output)
 
-def compare_versions(current: str,
-                     latest: str) -> bool:
-    if current == "" or latest == "":
+def compare_versions(version_to_check: str,
+                     latest_version_found: str) -> bool:
+    if version_to_check == "" or latest_version_found == "":
         return True
 
-    current_version: str = re.sub(VERSION_REGEX, "", current)
-    latest_version: str = re.sub(VERSION_REGEX, "", latest)
+    version_to_check: str = re.sub(VERSION_REGEX, "", version_to_check)
+    latest_version_found: str = re.sub(VERSION_REGEX, "", latest_version_found)
 
-    current_version_split: List[str] = current_version.split(".")
-    latest_version_list: List[str] = latest_version.split(".")
+    version_to_check_list: List[str] = version_to_check.split(".")
+    latest_version_found_list: List[str] = latest_version_found.split(".")
 
-    if len(current_version_split) > len(latest_version_list):
+    if len(version_to_check_list) > len(latest_version_found_list):
         return True
     else:
         # if they have equal length, this will still return the correct number
-        min_number: int = min(len(current_version_split), len(latest_version_list))
+        min_number: int = min(len(version_to_check_list), len(latest_version_found_list)) - 1
 
-        return compare_version_numbers(current_version_split, latest_version_list, min_number)
+        return compare_version_numbers(version_to_check=version_to_check_list, latest_version_found=latest_version_found_list, number=min_number)
 
 
-def compare_version_numbers(current_version: list,
-                            latest_version: list,
+def compare_version_numbers(version_to_check: list,
+                            latest_version_found: list,
                             number: int) -> bool:
     """
-    Should return True if "latest_version" is higher than "current_version".
-    :param current_version: supposed old version
-    :param latest_version: supposed new version
-    :param number: number of items in the list that will be iterated
-    :return: Whether the "latest_version" is higher than the "current_version"
+    Should return True if "version_to_check" is higher than "latest_version_found".
+    :param version_to_check: The version to check against
+    :param latest_version_found: The newest version found so far
+    :param number: Number of items in the list that will be iterated
+    :return: Whether the "version_to_check" is higher than the "latest_version_found"
     """
     for i in range(number):
-        current_ver: str = current_version[i]
-        latest_ver: str = latest_version[i]
+        version_to_check_fr: str = version_to_check[i]
+        latest_version_found_fr: str = latest_version_found[i]
 
-        pad: int = max(len(current_ver), len(latest_ver)) - 1
+        pad: int = max(len(version_to_check_fr), len(latest_version_found_fr)) - 1
 
-        current_ver = end_fill(current_ver, pad)
-        latest_ver = end_fill(latest_ver, pad)
+        version_to_check_fr = end_fill(version_to_check_fr, pad)
+        latest_version_found_fr = end_fill(latest_version_found_fr, pad)
 
-        if int(current_ver) > int(latest_ver):
-            return False
-        elif int(current_ver) < int(latest_ver):
+        if int(version_to_check_fr) > int(latest_version_found_fr):
             return True
+        elif int(version_to_check_fr) < int(latest_version_found_fr):
+            return False
         else:
             continue
 
@@ -447,15 +437,15 @@ def compare_version_numbers(current_version: list,
 
 
 def write_new_versions_and_names(latest_versions: Dict[str, Dict[str, Optional[str]]],
-                                 conf: str,
-                                 config: Dict[str, str | Dict[str, str]]) -> None:
-    new_config: Dict[str, str | Dict[str, str]] = copy.deepcopy(config)
+                                 config_path: str,
+                                 config_data: Dict[str, str | Dict[str, str]]) -> None:
+    new_config: Dict[str, str | Dict[str, str | Dict[str, str | bool]]] = copy.deepcopy(config_data)
 
     for tool in latest_versions.keys():
         new_config["Versions"][tool] = latest_versions[tool]["Version"]
         new_config["Names"][tool] = sanitize_name(latest_versions[tool]["Name"])
 
-    with open(conf, "w", encoding="utf-8") as stream:
+    with open(config_path, "w", encoding="utf-8") as stream:
         json.dump(new_config, stream, indent=4)
 
 
@@ -467,10 +457,10 @@ def end_fill(string: str,
         return string + "0" * (amount - len(string))
 
 
-async def download_latest_yt_apk(conf: str,
+async def download_latest_yt_apk(config_path: str,
                                  version: str) -> None:
     url: str = f"https://apkpure.com/youtube/com.google.android.youtube/download/{version}"
-    config: Dict[str, str | Dict[str, str]] = get_config(conf)
+    config_data: Dict[str, str | Dict[str, str]] = get_config(config_path=config_path)
     error_occurred: bool = False
 
     logging.log(MESSAGE, "Downloading latest YouTube APK...")
@@ -488,9 +478,9 @@ async def download_latest_yt_apk(conf: str,
                 sys.exit(1)
 
             async with page.expect_download() as downloader:
-                await page.click("a.download-start-btn", button="left", timeout=360000)
+                await page.click("a.jump-downloading-btn", button="left", timeout=180000)
             download = await downloader.value
-            await download.save_as(os.path.join(config["Store_Path"], f"com.google.android.youtube.{version}.apk"))
+            await download.save_as(os.path.join(config_data["Store_Path"], f"com.google.android.youtube.{version}.apk"))
         except playwright.async_api.TimeoutError as e:
             logging.critical(f"Timeout error: {e}", exc_info=True)
             error_occurred = True
@@ -509,28 +499,30 @@ async def download_latest_yt_apk(conf: str,
         logging.log(MESSAGE, "Finished downloading.")
 
 
-def patch_latest_yt_apk(conf: str) -> None:
+def patch_latest_yt_apk(config_path: str) -> None:
     logging.log(MESSAGE, "Patching latest YouTube APK...")
-    config: Dict[str, str | Dict[str, str]] = get_config(conf)
+    config: Dict[str, str | Dict[str, str]] = get_config(config_path=config_path)
 
     cli_path: str = os.path.join(config["Store_Path"], config["Names"]["CLI"])
     patches_path: str = os.path.join(config["Store_Path"], config["Names"]["Patches"])
-    integrations_path: str = os.path.join(config["Store_Path"], config["Names"]["Integrations"])
     output_file: str = os.path.join(config["Output"],
                                     f"app.revanced.android.youtube.{config['Versions']['Original_APK']}.apk")
     input_file: str = os.path.join(config["Store_Path"], config["Names"]["Original_APK"])
 
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
+    try:
+        os.remove(output_file)
+    except FileNotFoundError:
+        pass
+
     command = ["java",
                "-jar",
                cli_path,
                "patch",
                "--purge",
-               "--patch-bundle",
+               "--patches",
                patches_path,
-               "--merge",
-               integrations_path,
                "--out",
                output_file,
                input_file
