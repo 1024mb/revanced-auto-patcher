@@ -256,6 +256,9 @@ def start_process(config_path: str,
     if archive_org_identifier is None:
         archive_org_identifier = config_data.ArchiveOrg_Collection
     else:
+        if config_data.ArchiveOrg_Collection is not None:
+            logger.info(f"Replacing archive.org identifier from \"{config_data.ArchiveOrg_Collection}\" to \""
+                        f"{archive_org_identifier}\".")
         config_data.ArchiveOrg_Collection = archive_org_identifier
 
     new_ver_available: bool = False
