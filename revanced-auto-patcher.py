@@ -108,10 +108,6 @@ def main():
     parser.add_argument("packages",
                         nargs="*",
                         help="Apps to download and patch")
-    parser.add_argument("--init",
-                        help="Prepare config file. This should be done only once, if you want to change any path do it "
-                             "manually by editing the JSON file, \"init\" will reset everything in the config file.",
-                        action="store_true")
     parser.add_argument("--conf",
                         help="Path to the configuration file. By default \"auto-patch.json\" in the current working "
                              "directory.",
@@ -146,7 +142,7 @@ def main():
                         help="Do not use archive.org for downloading the latest version.",
                         action="store_true")
     parser.add_argument("--archive-org-identifier",
-                        help="Identifier to use to lookup for APK files in archive.org.",
+                        help="Collection's identifier to use to lookup for APK files in archive.org.",
                         type=str,
                         required=False)
     # noinspection PyTypeChecker
@@ -158,7 +154,6 @@ def main():
 
     args = parser.parse_args()
 
-    init: bool = args.init
     config_path: str = args.conf[0]
     output: str = args.output[0]
     store_path: str = args.store_path[0]
@@ -195,7 +190,7 @@ def main():
     else:
         logger.add(sys.stderr, level=args.log_level, format=logger_format)
 
-    if init:
+    if not os.path.exists(config_path):
         logger.info("Initializing configuration...")
         init_(conf=config_path,
               output=output,
@@ -240,12 +235,7 @@ def start_process(config_path: str,
                   no_archive_org: bool,
                   skip_previous_apps: bool,
                   archive_org_identifier: str | None) -> None:
-    if not os.path.exists(config_path):
-        logger.critical("Config file doesn't exist, you have to initialize.")
-        sys.exit(1)
-    elif not os.path.isfile(config_path):
-        logger.critical("Supplied config file path is not a file.")
-        sys.exit(1)
+    logger.info("Starting up...")
 
     if is_old_config(config_path=config_path):
         migrate_config(config_path=config_path, archive_org_identifier=archive_org_identifier)
@@ -260,6 +250,8 @@ def start_process(config_path: str,
             logger.info(f"Replacing archive.org identifier from \"{config_data.ArchiveOrg_Collection}\" to \""
                         f"{archive_org_identifier}\".")
         config_data.ArchiveOrg_Collection = archive_org_identifier
+
+    logger.info("Checking tools...")
 
     new_ver_available: bool = False
     patches_new_version: bool = False
