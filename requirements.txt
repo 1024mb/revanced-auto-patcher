@@ -1,2 +1,8 @@
-requests~=2.32.3
-playwright~=1.44.0
+requests~=2.32.5
+playwright~=1.57.0
+
+orjson~=3.11.5
+pydantic~=2.12.5
+internetarchive~=5.7.1
+loguru~=0.7.3
+beautifulsoup4~=4.14.3
