@@ -29,7 +29,7 @@ if sys.version_info < (3, 10):
 USER_AGENT: str = (r"Mozilla/5.0 (iPhone; CPU iPhone OS 14_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) "
                    r"FxiOS/127.0 Mobile/15E148 Safari/605.1.15")
 PLATFORM: str = sys.platform
-VERSION_REGEX: str = r"^v\.?"
+VERSION_REGEX: re.Pattern[str] = re.compile(r"^v\.?", flags=re.IGNORECASE)
 
 PREMIUM_APPS: tuple[str, ...] = (
     "com.andrewshu.android.redditdonation",
@@ -449,7 +449,7 @@ def get_latest_version_name_and_url(url: str,
             newest_version = json_data[i - 1]["tag_name"]
             newest_version_url, newest_version_name = get_download_url(json_data[i - 1], ext, tool_name)
 
-    return re.sub(VERSION_REGEX, "", newest_version), newest_version_url, newest_version_name,
+    return VERSION_REGEX.sub("", newest_version), newest_version_url, newest_version_name,
 
 
 def get_download_url(data: dict,
@@ -594,8 +594,8 @@ def compare_versions(version_to_check: str,
     if version_to_check == latest_version_found:
         return False
 
-    version_to_check: str = re.sub(VERSION_REGEX, "", version_to_check)
-    latest_version_found: str = re.sub(VERSION_REGEX, "", latest_version_found)
+    version_to_check: str = VERSION_REGEX.sub("", version_to_check)
+    latest_version_found: str = VERSION_REGEX.sub("", latest_version_found)
 
     if re.search(r"[^\d.]", version_to_check) is not None:
         version_to_check = get_sanitized_version(version=version_to_check)
