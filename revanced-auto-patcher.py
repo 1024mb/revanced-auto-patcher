@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import urllib.request
+from string import Template
 from urllib.error import HTTPError
 
 import bs4
@@ -770,7 +771,7 @@ def download_with_apkpure(config_data: Config,
     url: str = f"https://apkpure.com/xxxxxx/{package_name}/download/{version}"
     file_names: dict[str, str] = {}
 
-    logger.info(f"Downloading latest APK for {package_name}...")
+    logger.info(f"Downloading latest APK for {package_name} {','.join(abis)}...")
 
     with playwright_instance.new_page(user_agent=USER_AGENT) as page:
         try:
@@ -815,6 +816,19 @@ def download_with_apkpure(config_data: Config,
                 urls_to_download[abi] = a_section["href"]
 
             for abi, extracted_url in urls_to_download.items():
+                file_name: Template = Template(os.path.join(config_data.Store_Path,
+                                                            sanitize_name(name=f"{package_name}.{version}.{abi}",
+                                                                          do_not_use_unicode=True) + ".$ext"))
+
+                if os.path.exists(file_name.substitute(ext="apk")):
+                    file_names[file_name.substitute(ext="apk")] = abi
+                    logger.info(f"Already downloaded for {abi}.")
+                    continue
+                elif os.path.exists(file_name.substitute(ext="xapk")):
+                    file_names[file_name.substitute(ext="xapk")] = abi
+                    logger.info(f"Already downloaded for {abi}.")
+                    continue
+
                 with page.expect_download() as downloader:
                     page.click(f"a[href=\"{extracted_url}\"]")
 
@@ -828,12 +842,9 @@ def download_with_apkpure(config_data: Config,
                     case unknown:
                         raise ValueError(f"Unexpected file extension: {unknown}")
 
-                file_name: str = os.path.join(config_data.Store_Path,
-                                              sanitize_name(name=f"{package_name}.{version}.{abi}.{file_ext}",
-                                                            do_not_use_unicode=True))
-                file_names[file_name] = abi
+                file_names[os.path.basename(file_name.substitute(ext=file_ext))] = abi
 
-                download.save_as(file_name)
+                download.save_as(file_name.substitute(ext=file_ext))
         except playwright.sync_api.TimeoutError as e:
             logger.opt(exception=True).critical(f"Timeout error: {e}")
             return None
