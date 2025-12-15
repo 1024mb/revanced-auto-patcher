@@ -244,13 +244,13 @@ def start_process(config_path: str,
     config_data: Config = get_config(config_path=config_path)
     latest_versions: dict[str, dict[str, str | None]] = get_latest_versions(include_beta=include_beta)
 
-    if archive_org_identifier is None:
-        archive_org_identifier = config_data.ArchiveOrg_Collection
-    else:
+    if archive_org_identifier is not None:
         if config_data.ArchiveOrg_Collection is not None:
             logger.info(f"Replacing archive.org identifier from \"{config_data.ArchiveOrg_Collection}\" to \""
                         f"{archive_org_identifier}\".")
         config_data.ArchiveOrg_Collection = archive_org_identifier
+
+        write_config_file(filepath=config_path, data=config_data)
 
     logger.info("Checking tools...")
 
@@ -343,8 +343,7 @@ def start_process(config_path: str,
                                       config_path=config_path,
                                       force_patch=force_patch,
                                       abis=abis,
-                                      no_archive_org=no_archive_org,
-                                      archive_org_identifier=archive_org_identifier)
+                                      no_archive_org=no_archive_org)
 
     write_config_file(data=config_data, filepath=config_path)
 
@@ -739,8 +738,7 @@ def download_latest_apk(config_data: Config,
                         package_name: str,
                         version: str,
                         abis: list[str],
-                        no_archive_org: bool,
-                        archive_org_identifier: str | None) -> dict[str, str] | None:
+                        no_archive_org: bool) -> dict[str, str] | None:
     """
     This should return a dict with the keys being the file names and the values the ABI they correspond to.
     """
@@ -750,7 +748,7 @@ def download_latest_apk(config_data: Config,
                                        abis=abis)
 
     if file_names is None:
-        if no_archive_org or archive_org_identifier is None:
+        if no_archive_org or config_data.ArchiveOrg_Collection is None:
             return None
 
         logger.info("Trying with archive.org...")
@@ -758,8 +756,7 @@ def download_latest_apk(config_data: Config,
         file_names = retrieve_from_archive_org(config_data=config_data,
                                                package_name=package_name,
                                                version=version,
-                                               abis=abis,
-                                               archive_org_identifier=archive_org_identifier)
+                                               abis=abis)
 
     return file_names
 
@@ -770,6 +767,7 @@ def download_with_apkpure(config_data: Config,
                           abis: list[str]) -> dict[str, str] | None:
     url: str = f"https://apkpure.com/xxxxxx/{package_name}/download/{version}"
     file_names: dict[str, str] = {}
+    downloaded: bool = False
 
     logger.info(f"Downloading latest APK for {package_name} {','.join(abis)}...")
 
@@ -821,11 +819,11 @@ def download_with_apkpure(config_data: Config,
                                                                           do_not_use_unicode=True) + ".$ext"))
 
                 if os.path.exists(file_name.substitute(ext="apk")):
-                    file_names[file_name.substitute(ext="apk")] = abi
+                    file_names[os.path.basename(file_name.substitute(ext="apk"))] = abi
                     logger.info(f"Already downloaded for {abi}.")
                     continue
                 elif os.path.exists(file_name.substitute(ext="xapk")):
-                    file_names[file_name.substitute(ext="xapk")] = abi
+                    file_names[os.path.basename(file_name.substitute(ext="xapk"))] = abi
                     logger.info(f"Already downloaded for {abi}.")
                     continue
 
@@ -845,6 +843,9 @@ def download_with_apkpure(config_data: Config,
                 file_names[os.path.basename(file_name.substitute(ext=file_ext))] = abi
 
                 download.save_as(file_name.substitute(ext=file_ext))
+
+                downloaded = True
+                logger.info(f"Finished downloading for {abi}.")
         except playwright.sync_api.TimeoutError as e:
             logger.opt(exception=True).critical(f"Timeout error: {e}")
             return None
@@ -855,17 +856,18 @@ def download_with_apkpure(config_data: Config,
             logger.opt(exception=True).error(f"There was an error saving the APK file: {e}")
             sys.exit(1)
 
-        logger.info("Finished downloading.")
+        if downloaded:
+            logger.info("Finished downloading.")
+
         return file_names
 
 
 def retrieve_from_archive_org(config_data: Config,
                               package_name: str,
                               version: str,
-                              abis: list[str],
-                              archive_org_identifier: str) -> dict[str, str] | None:
+                              abis: list[str]) -> dict[str, str] | None:
     if len(ARCHIVE_ORG_AVAILABLE_FILES) == 0:
-        get_available_files(archive_org_identifier=archive_org_identifier)
+        get_available_files(archive_org_identifier=config_data.ArchiveOrg_Collection)
 
     tried_universal: bool = False
 
@@ -971,7 +973,8 @@ def download_from_archive_org_universal(config_data: Config,
 
 
 def patch_apk(config_data: Config,
-              package_name: str) -> None:
+              package_name: str,
+              abis_to_process: list[str]) -> None:
     logger.info(f"Patching latest {package_name} APK...")
 
     cli_path: str = os.path.join(config_data.Store_Path, config_data.Tools["CLI"].filename)
@@ -983,6 +986,11 @@ def patch_apk(config_data: Config,
         new_package_name = package_name.replace(package_name.split(".")[0] + ".", "app.revanced.", 1)
 
     for input_filename, abi in config_data.Apps[package_name].filename.items():
+        if abi not in abis_to_process:
+            continue
+
+        logger.info(f"Processing {'universal' if abi == 'any' else abi}...")
+
         if abi == "any":
             output_name = f"{new_package_name}.{config_data.Apps[package_name].version}.apk"
         else:
@@ -1146,8 +1154,7 @@ def process_package(package_name: str,
                     config_path: str,
                     force_patch: bool,
                     abis: list[str],
-                    no_archive_org: bool,
-                    archive_org_identifier: str | None) -> Config:
+                    no_archive_org: bool) -> Config:
     if package_name.lower() not in get_compatible_packages(
             cli_path=os.path.join(config_data.Store_Path, config_data.Tools["CLI"].filename),
             patches_path=os.path.join(config_data.Store_Path, config_data.Tools["Patches"].filename),
@@ -1173,49 +1180,83 @@ def process_package(package_name: str,
     if compare_versions(version_to_check=latest_version, latest_version_found=current_version, thorough=False):
         logger.info(f"New version supported for {package_name}...")
 
-        file_names: dict[str, str] | None = download_latest_apk(config_data=config_data,
-                                                                package_name=package_name,
-                                                                version=latest_version,
-                                                                abis=abis,
-                                                                no_archive_org=no_archive_org,
-                                                                archive_org_identifier=archive_org_identifier)
-
-        if file_names is None:
-            logger.error(f"Couldn't download APK for {package_name}.")
-            return config_data
-
-        for file_name in copy.copy(file_names):
-            if os.path.splitext(file_name)[1].lower() == ".xapk":
-                new_file_name: str | None = convert_to_apk(file_name=file_name,
-                                                           config_data=config_data,
-                                                           abi=file_names[file_name])
-
-                if new_file_name is None:
-                    return config_data
-
-                file_names[os.path.basename(new_file_name)] = file_names[file_name]
-                file_names.pop(file_name)
-
-        try:
-            config_data.Apps[package_name].version = latest_version
-            config_data.Apps[package_name].filename = file_names
-        except KeyError:
-            config_data.Apps[package_name] = AppData(version=latest_version, filename=file_names)
-
-        config_data = Config.model_validate(config_data)
-    elif not force_patch:
-        logger.info(f"No new version is supported for {package_name}, latest version has been already patched.")
-        return config_data
+        config_data = perform_download(package_name=package_name,
+                                       config_data=config_data,
+                                       abis=abis,
+                                       no_archive_org=no_archive_org,
+                                       version=latest_version,
+                                       merge_filenames=False)
     else:
-        logger.info(f"No new version is supported for {package_name} but --force-patch was used.")
+        abis_copy = abis.copy()
+        for abi in config_data.Apps[package_name].filename.values():
+            if abi in abis_copy.copy():
+                abis_copy.remove(abi)
+        if len(abis_copy) == 0:
+            # no new ABI has been specified to process
+            if not force_patch:
+                logger.info(f"No new version is supported for {package_name}, latest version has been already patched.")
+                return config_data
+            else:
+                logger.info(f"No new version is supported for {package_name} but --force-patch was used.")
+        else:
+            config_data = perform_download(package_name=package_name,
+                                           config_data=config_data,
+                                           abis=abis_copy,
+                                           no_archive_org=no_archive_org,
+                                           version=latest_version,
+                                           merge_filenames=True)
+            if not force_patch:
+                abis = abis_copy
+            # else the user wants to patch all available ABIs
 
     patch_apk(config_data=config_data,
-              package_name=package_name)
+              package_name=package_name,
+              abis_to_process=abis)
 
     write_config_file(filepath=config_path,
                       data=config_data)
 
     return config_data
+
+
+def perform_download(package_name: str,
+                     config_data: Config,
+                     abis: list[str],
+                     no_archive_org: bool,
+                     version: str,
+                     merge_filenames: bool):
+    file_names: dict[str, str] | None = download_latest_apk(config_data=config_data,
+                                                            package_name=package_name,
+                                                            version=version,
+                                                            abis=abis,
+                                                            no_archive_org=no_archive_org)
+
+    if file_names is None:
+        logger.error(f"Couldn't download APK for {package_name}.")
+        return config_data
+
+    for file_name in copy.copy(file_names):
+        if os.path.splitext(file_name)[1].lower() == ".xapk":
+            new_file_name: str | None = convert_to_apk(file_name=file_name,
+                                                       config_data=config_data,
+                                                       abi=file_names[file_name])
+
+            if new_file_name is None:
+                return config_data
+
+            file_names[os.path.basename(new_file_name)] = file_names[file_name]
+            file_names.pop(file_name)
+
+    try:
+        config_data.Apps[package_name].version = version
+        if merge_filenames:
+            config_data.Apps[package_name].filename |= file_names
+        else:
+            config_data.Apps[package_name].filename = file_names
+    except KeyError:
+        config_data.Apps[package_name] = AppData(version=version, filename=file_names)
+
+    return Config.model_validate(config_data)
 
 
 def search_latest_version(package_name: str) -> str | None:
