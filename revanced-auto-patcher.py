@@ -769,7 +769,7 @@ def download_with_apkpure(config_data: Config,
     file_names: dict[str, str] = {}
     downloaded: bool = False
 
-    logger.info(f"Downloading latest APK for {package_name} {','.join(abis)}...")
+    logger.info(f"Downloading latest APK for {package_name} ({','.join(abis)})...")
 
     with playwright_instance.new_page(user_agent=USER_AGENT) as page:
         try:
@@ -975,6 +975,9 @@ def download_from_archive_org_universal(config_data: Config,
 def patch_apk(config_data: Config,
               package_name: str,
               abis_to_process: list[str]) -> None:
+    if config_data.Apps.get(package_name) is None:
+        return
+
     logger.info(f"Patching latest {package_name} APK...")
 
     cli_path: str = os.path.join(config_data.Store_Path, config_data.Tools["CLI"].filename)
@@ -1177,15 +1180,17 @@ def process_package(package_name: str,
     if latest_version is None:
         return config_data
 
+    perform_patch = True
+
     if compare_versions(version_to_check=latest_version, latest_version_found=current_version, thorough=False):
         logger.info(f"New version supported for {package_name}...")
 
-        config_data = perform_download(package_name=package_name,
-                                       config_data=config_data,
-                                       abis=abis,
-                                       no_archive_org=no_archive_org,
-                                       version=latest_version,
-                                       merge_filenames=False)
+        config_data, perform_patch = perform_download(package_name=package_name,
+                                                      config_data=config_data,
+                                                      abis=abis,
+                                                      no_archive_org=no_archive_org,
+                                                      version=latest_version,
+                                                      merge_filenames=False)
     else:
         abis_copy = abis.copy()
         for abi in config_data.Apps[package_name].filename.values():
@@ -1199,19 +1204,20 @@ def process_package(package_name: str,
             else:
                 logger.info(f"No new version is supported for {package_name} but --force-patch was used.")
         else:
-            config_data = perform_download(package_name=package_name,
-                                           config_data=config_data,
-                                           abis=abis_copy,
-                                           no_archive_org=no_archive_org,
-                                           version=latest_version,
-                                           merge_filenames=True)
+            config_data, perform_patch = perform_download(package_name=package_name,
+                                                          config_data=config_data,
+                                                          abis=abis_copy,
+                                                          no_archive_org=no_archive_org,
+                                                          version=latest_version,
+                                                          merge_filenames=True)
             if not force_patch:
                 abis = abis_copy
             # else the user wants to patch all available ABIs
 
-    patch_apk(config_data=config_data,
-              package_name=package_name,
-              abis_to_process=abis)
+    if perform_patch:
+        patch_apk(config_data=config_data,
+                  package_name=package_name,
+                  abis_to_process=abis)
 
     write_config_file(filepath=config_path,
                       data=config_data)
@@ -1224,7 +1230,7 @@ def perform_download(package_name: str,
                      abis: list[str],
                      no_archive_org: bool,
                      version: str,
-                     merge_filenames: bool):
+                     merge_filenames: bool) -> tuple[Config, bool]:
     file_names: dict[str, str] | None = download_latest_apk(config_data=config_data,
                                                             package_name=package_name,
                                                             version=version,
@@ -1233,7 +1239,7 @@ def perform_download(package_name: str,
 
     if file_names is None:
         logger.error(f"Couldn't download APK for {package_name}.")
-        return config_data
+        return config_data, False
 
     for file_name in copy.copy(file_names):
         if os.path.splitext(file_name)[1].lower() == ".xapk":
@@ -1242,7 +1248,7 @@ def perform_download(package_name: str,
                                                        abi=file_names[file_name])
 
             if new_file_name is None:
-                return config_data
+                return config_data, False
 
             file_names[os.path.basename(new_file_name)] = file_names[file_name]
             file_names.pop(file_name)
@@ -1256,7 +1262,7 @@ def perform_download(package_name: str,
     except KeyError:
         config_data.Apps[package_name] = AppData(version=version, filename=file_names)
 
-    return Config.model_validate(config_data)
+    return Config.model_validate(config_data), True
 
 
 def search_latest_version(package_name: str) -> str | None:
