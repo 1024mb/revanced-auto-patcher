@@ -795,10 +795,20 @@ def download_with_apkpure(config_data: Config,
             div_to_search: dict[str, Tag] = {}
 
             for div in found_divs:
-                if div.text in abis:
+                abi_list = div.text.split(", ")
+                if len(set(REAL_ABIS).difference(abi_list)) == 0:
+                    next_sibling = div.next_sibling
+                    if next_sibling is not None:
+                        div_to_search["any"] = next_sibling
+                        break
+                elif div.text in abis:
                     next_sibling = div.next_sibling
                     if next_sibling is not None:
                         div_to_search[div.text] = next_sibling
+
+            if len(div_to_search) == 0:
+                logger.error("Couldn't extract download link")
+                return None
 
             urls_to_download: dict[str, str] = {}
 
@@ -814,8 +824,13 @@ def download_with_apkpure(config_data: Config,
                 urls_to_download[abi] = a_section["href"]
 
             for abi, extracted_url in urls_to_download.items():
+                if abi == "any":
+                    abi_part = ""
+                else:
+                    abi_part = f".{abi}"
+
                 file_name: Template = Template(os.path.join(config_data.Store_Path,
-                                                            sanitize_name(name=f"{package_name}.{version}.{abi}",
+                                                            sanitize_name(name=f"{package_name}.{version}{abi_part}",
                                                                           do_not_use_unicode=True) + ".$ext"))
 
                 if os.path.exists(file_name.substitute(ext="apk")):
@@ -989,7 +1004,7 @@ def patch_apk(config_data: Config,
         new_package_name = package_name.replace(package_name.split(".")[0] + ".", "app.revanced.", 1)
 
     for input_filename, abi in config_data.Apps[package_name].filename.items():
-        if abi not in abis_to_process:
+        if abi != "any" and abi not in abis_to_process:
             continue
 
         logger.info(f"Processing {'universal' if abi == 'any' else abi}...")
